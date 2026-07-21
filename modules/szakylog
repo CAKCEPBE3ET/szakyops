@@ -78,7 +78,7 @@ run_szakylog() {
                 echo -e "\n  ${C_BOLD}Filter examples:${C_DEF}"
                 echo -e "  - Specific time/date: ${C_YEL}12:03${C_DEF} or ${C_YEL}2026-07-20${C_DEF}"
                 echo -e "  - Interval: ${C_YEL}10:30-10:36${C_DEF}"
-                echo -e "  - Yellow/Red warnings: ${C_RED}alert${C_DEF} or ${C_YEL}warning${C_DEF}"
+#                echo -e "  - Yellow/Red warnings: ${C_RED}alert${C_DEF} or ${C_YEL}warning${C_DEF}"
                 echo -e "  - Leave empty for FULL export"
                 printf "\n  ${C_CYN}Enter search keyword/date/interval or press [Enter]:${C_DEF} "
                 read -r KEYWORD
@@ -92,13 +92,14 @@ run_szakylog() {
 
                 if [ -z "$KEYWORD" ]; then
                     cat "$selected_log" > "$tmp_filtered"
-                elif [[ "$KEYWORD" == "alert" || "$KEYWORD" == "warning" ]]; then
-                    awk '
-                        BEGIN { RS="===\n"; ORS="===\n" }
-                        /\033\[(1;)?31m|\033\[(1;)?33m|⚠️|❌/ { print }
-                    ' "$selected_log" > "$tmp_filtered" || true
+#Removed v1.0.1
+#                elif [[ "$KEYWORD" == "alert" || "$KEYWORD" == "warning" ]]; then
+ #                   awk '
+  #                      BEGIN { RS="===\n"; ORS="===\n" }
+   #                     /\033\[(1;)?31m|\033\[(1;)?33m|⚠️|❌/ { print }
+    #                ' "$selected_log" > "$tmp_filtered" || true
                 else
-                    if [[ "$KEYWORD" =~ .*-.* ]]; then
+                    if [[ "$KEYWORD" =~ :.*-.*: ]]; then # Modified v1.0.1
                         START_TIME=$(echo "$KEYWORD" | cut -d'-' -f1)
                         END_TIME=$(echo "$KEYWORD" | cut -d'-' -f2)
 

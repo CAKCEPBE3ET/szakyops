@@ -30,9 +30,15 @@ read -r TARGET_USER
 printf "  ${C_CYN}%-45s${C_DEF}: " "3. Target destination path (target_dest)"
 read -r TARGET_DEST
 
-printf "  ${C_CYN}%-45s${C_DEF} [/home/$USER/.ssh/id_ed25519]: " "4. SSH Key path (ssh_key)"
+#Modified/Created v1.0.1
+REAL_USER="${SUDO_USER:-$USER}"
+REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
+DEFAULT_KEY="${REAL_HOME:-$HOME}/.ssh/id_ed25519"
+
+printf "  ${C_CYN}%-45s${C_DEF} :\n  [Default key: %s] " "4. SSH key path (ssh_key)" "$DEFAULT_KEY"
 read -r SSH_KEY
-SSH_KEY=${SSH_KEY:-"/home/$USER/.ssh/id_ed25519"}
+SSH_KEY=${SSH_KEY:-$DEFAULT_KEY}
+#########################
 
 printf "  ${C_CYN}%-45s${C_DEF}: " "5. Source paths (space separated)"
 read -r INPUT_SOURCES

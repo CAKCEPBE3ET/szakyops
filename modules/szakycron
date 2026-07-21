@@ -105,6 +105,7 @@ run_szakycron() {
                 echo -e "  [1] Every 12 hours (00:00 & 12:00)"
                 echo -e "  [2] Daily Once (02:00 AM) - *Standard*"
                 echo -e "  [3] Every 3 days (02:00 AM)"
+		echo -e "  [4] Every minute (It is only recommended for testing)" #Created v1.0.1
                 read -r -p "  Choice [1-3]: " S_CHOICE
 
                 printf "\n  ${C_CYN}Enter Backup Log Path${C_DEF} [/var/log/szakysave.log]: "
@@ -122,6 +123,7 @@ run_szakycron() {
                     1) echo "0 */12 * * * $SAVE_CMD" >> "$tmp_cron" ;;
                     2) echo "0 2 * * * $SAVE_CMD" >> "$tmp_cron" ;;
                     3) echo "0 2 */3 * * $SAVE_CMD" >> "$tmp_cron" ;;
+		    4) echo "* * * * * $SAVE_CMD" >> "$tmp_cron" ;; #Created v1.0.1
                     *) echo -e "${C_RED}Invalid choice.${C_DEF}" && rm -f "$tmp_cron" && sleep 2 && continue ;;
                 esac
                 crontab "$tmp_cron"
