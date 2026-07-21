@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+#  Project:     Szakyops 
+#  File:        modules/szakycron
+#  Description: Automating module for fetching and saving
+#  Author:      Stephen Szaky (info@szakysoft.hu)
+#  Website:     https://szakysoft.hu
+#  Version:     1.0.2
+#  License:     MIT
+# ==============================================================================
+
+run_szakycron() {
+    if [[ $EUID -ne 0 ]]; then
+        echo -e "\n\033[1;31mError: Cron Manager requires root privileges. Please run szakyops with sudo!\033[0m"
+        return 1
+    fi
+
+    C_DEF='\033[0m'
+    C_RED='\033[1;31m'
+    C_GRN='\033[1;32m'
+    C_YEL='\033[1;33m'
+    C_CYN='\033[1;36m'
+    C_BOLD='\033[1m'
+    LINE_LEN=88
+
+    print_line_eq() { printf "${C_CYN}${C_BOLD}%${LINE_LEN}s${C_DEF}\n" "" | tr ' ' '='; }
+
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    CONFIG_FILE="/opt/szakyops/config/szakyops.conf"
+
+    if [[ -f "$CONFIG_FILE" ]]; then
+        source "$CONFIG_FILE"
+    fi
+
+    FETCH_LOG=${FETCH_LOG:-"/var/log/szakyfetch.log"}
+    SAVE_LOG=${SAVE_LOG:-"/var/log/szakysave.log"}
+
+    FETCH_CMD="env TERM=xterm-256color IS_CRON=true bash $SCRIPT_DIR/szakyops --fetch >> $FETCH_LOG 2>&1"
+    SAVE_CMD="env TERM=xterm-256color IS_CRON=true sudo -u \${SUDO_USER:-\$USER} bash -c 'source $SCRIPT_DIR/modules/szakysave && run_szakysave' >> $SAVE_LOG 2>&1"
+
+    while true; do
+        clear
+        print_line_eq
+        echo -e "  ${C_CYN}${C_BOLD}⏰ SZAKYOPS: Advanced Cron Automation Manager ⏰${C_DEF}"
+        print_line_eq
+        echo ""
+
+        CURRENT_FETCH=$(crontab -l 2>/dev/null | grep -F "$SCRIPT_DIR/szakyops --fetch" || true)
+        CURRENT_SAVE=$(crontab -l 2>/dev/null | grep -F "run_szakysave" || true)
+
+        echo -e "${C_BOLD}  [ Current Automation Status ]${C_DEF}"
+        if [ -n "$CURRENT_FETCH" ]; then
+            echo -e "  📊 Monitoring (Fetch): ${C_GRN}Active${C_DEF} -> $(echo "$CURRENT_FETCH" | awk '{print $4,$5,$6,$7,$8}')"
+            echo -e "     Log: $FETCH_LOG"
+        else
+            echo -e "  📊 Monitoring (Fetch): ${C_RED}Inactive${C_DEF}"
+        fi
+
+        if [ -n "$CURRENT_SAVE" ]; then
+            echo -e "  💾 Backup (Save)     : ${C_GRN}Active${C_DEF} -> $(echo "$CURRENT_SAVE" | awk '{print $6,$7,$8,$9,$10}')"
+            echo -e "     Log: $SAVE_LOG"
+        else
+            echo -e "  💾 Backup (Save)     : ${C_RED}Inactive${C_DEF}"
+        fi
+        echo ""
+        print_line_eq
+        echo ""
+        echo -e "  [1] Configure Monitoring (SysStat Fetch)"
+        echo -e "  [2] Configure Backup Execution (Save)"
+        echo -e "  [3] Disable All Szakyops Crons"
+        echo -e "  [4] Return to Main Menu"
+        echo ""
+        read -r -p "  Select an option [1-4]: " MAIN_CHOICE
+
+        case "$MAIN_CHOICE" in
+            1)
+                echo -e "\n  ${C_CYN}📊 Select Monitoring Frequency:${C_DEF}"
+                echo -e "  [1] Every 1 minute"
+                echo -e "  [2] Every 15 minutes"
+                echo -e "  [3] Every 1 hour"
+                read -r -p "  Choice [1-3]: " F_CHOICE
+
+                printf "\n  ${C_CYN}Enter Monitoring Log Path${C_DEF} [/var/log/szakyfetch.log]: "
+                read -r FETCH_LOG
+                FETCH_LOG=${FETCH_LOG:-"/var/log/szakyfetch.log"}
+
+                touch "$FETCH_LOG"
+                chown root:root "$FETCH_LOG"
+                chmod 644 "$FETCH_LOG"
+
+                local tmp_cron=$(mktemp)
+                crontab -l 2>/dev/null | grep -v -F "$SCRIPT_DIR/szakyops --fetch" > "$tmp_cron" || true
+
+                case "$F_CHOICE" in
+                    1) echo "* * * * * $FETCH_CMD" >> "$tmp_cron" ;;
+                    2) echo "*/15 * * * * $FETCH_CMD" >> "$tmp_cron" ;;
+                    3) echo "0 * * * * $FETCH_CMD" >> "$tmp_cron" ;;
+                    *) echo -e "${C_RED}Invalid choice.${C_DEF}" && rm -f "$tmp_cron" && sleep 2 && continue ;;
+                esac
+                crontab "$tmp_cron"
+                rm -f "$tmp_cron"
+                echo -e "\n  ${C_GRN}Success:${C_DEF} Monitoring cron updated."
+                sleep 2
+                ;;
+            2)
+                if [[ ! -f "$CONFIG_FILE" ]]; then
+                    echo -e "\n  ${C_RED}Error: Backup configuration not found!${C_DEF}"
+                    echo -e "  ${C_YEL}Please run 'Backup Setup' from the main menu first to use this feature.${C_DEF}"
+                    sleep 3
+                    continue
+                fi
+
+                echo -e "\n  ${C_CYN}💾 Select Backup Frequency (Corporate Standards):${C_DEF}"
+                echo -e "  [1] Every 12 hours (00:00 & 12:00)"
+                echo -e "  [2] Daily Once (02:00 AM) - *Standard*"
+                echo -e "  [3] Every 3 days (02:00 AM)"
+		echo -e "  [4] Every minute (It is only recommended for testing)" #Created v1.0.1
+                read -r -p "  Choice [1-3]: " S_CHOICE
+
+                printf "\n  ${C_CYN}Enter Backup Log Path${C_DEF} [/var/log/szakysave.log]: "
+                read -r SAVE_LOG
+                SAVE_LOG=${SAVE_LOG:-"/var/log/szakysave.log"}
+
+                touch "$SAVE_LOG"
+                chown root:root "$SAVE_LOG"
+                chmod 644 "$SAVE_LOG"
+
+                local tmp_cron=$(mktemp)
+                crontab -l 2>/dev/null | grep -v -F "run_szakysave" > "$tmp_cron" || true
+
+                case "$S_CHOICE" in
+                    1) echo "0 */12 * * * $SAVE_CMD" >> "$tmp_cron" ;;
+                    2) echo "0 2 * * * $SAVE_CMD" >> "$tmp_cron" ;;
+                    3) echo "0 2 */3 * * $SAVE_CMD" >> "$tmp_cron" ;;
+		    4) echo "* * * * * $SAVE_CMD" >> "$tmp_cron" ;; #Created v1.0.1
+                    *) echo -e "${C_RED}Invalid choice.${C_DEF}" && rm -f "$tmp_cron" && sleep 2 && continue ;;
+                esac
+                crontab "$tmp_cron"
+                rm -f "$tmp_cron"
+                echo -e "\n  ${C_GRN}Success:${C_DEF} Backup cron updated."
+                sleep 2
+                ;;
+            3)
+                local tmp_cron=$(mktemp)
+                crontab -l 2>/dev/null | grep -v -F "$SCRIPT_DIR/szakyops --fetch" | grep -v -F "run_szakysave" > "$tmp_cron" || true
+                crontab "$tmp_cron"
+                rm -f "$tmp_cron"
+                echo -e "\n  ${C_YEL}Success:${C_DEF} All Szakyops automated tasks disabled."
+                sleep 2
+                ;;
+            4)
+                return 0
+                ;;
+            *)
+                echo -e "\n  ${C_RED}Invalid option!${C_DEF}"
+                sleep 2
+                ;;
+        esac
+    done
+}

@@ -1,0 +1,425 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+#  Project:     Szakyops 
+#  File:        modules/szakyfetch
+#  Description: Server monitoring tool
+#  Author:      Stephen Szaky (info@szakysoft.hu)
+#  Website:     https://szakysoft.hu
+#  Version:     1.0.2
+#  License:     MIT
+# ==============================================================================
+
+
+SMARTCTL="/usr/sbin/smartctl"
+VG_CMD="/usr/sbin/vgs"
+AWK="/usr/bin/awk"
+SED="/usr/bin/sed"
+
+C_DEF='\033[0m'
+C_RED='\033[1;31m'
+C_GRN='\033[1;32m'
+C_YEL='\033[1;33m'
+C_CYN='\033[1;36m'
+C_BOLD='\033[1m'
+
+W_L=45
+W_M_VAL=15
+LINE_LEN=98
+
+print_line_eq() { printf "${C_CYN}${C_BOLD}%${LINE_LEN}s${C_DEF}\n" "" | tr ' ' '='; }
+print_line_dash() { printf "${C_CYN}%${LINE_LEN}s${C_DEF}\n" "" | tr ' ' '-'; }
+
+system_info() {
+    local OS_NAME=$(grep '^PRETTY_NAME=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"')
+    [ -z "$OS_NAME" ] && OS_NAME="Linux"
+    local KERNEL=$(uname -r)
+    local HOST=$(hostname)
+    local UPTIME=$(uptime -p 2>/dev/null | $SED 's/^up //')
+
+    local RAW_LOAD=$(cat /proc/loadavg 2>/dev/null)
+    local LOAD=$(echo "$RAW_LOAD" | $AWK '{print $1 ", " $2 ", " $3}')
+    local LOAD_1MIN=$(echo "$RAW_LOAD" | $AWK '{print $1}')
+
+    local CORES=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)
+
+    local COL_LOAD=$($AWK -v l="$LOAD_1MIN" -v c="$CORES" 'BEGIN {
+        rel = l / c;
+        if (rel >= 1.0) print "'$C_RED'";
+        else if (rel >= 0.7) print "'$C_YEL'";
+        else print "'$C_GRN'"
+    }')
+
+    printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s\n" "🐧" "Operating System" "Dist:" "$OS_NAME"
+    printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s\n" "🖥️" "Hostname & Kernel" "Host:" "$HOST ($KERNEL)"
+    printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s\n" "⏱️" "System Uptime" "Time:" "$UPTIME"
+    printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${COL_LOAD}%s${C_DEF}\n" "📈" "Load Average" "Avg:" "$LOAD"
+
+    local APT_OUT=$(apt-get -s upgrade 2>/dev/null)
+    local UPDATES=$(echo "$APT_OUT" | $AWK '/upgraded, / {print $1}')
+    UPDATES=${UPDATES:-0}
+
+    local COL_UPD=$C_GRN
+    [ "$UPDATES" -gt 0 ] && COL_UPD=$C_YEL
+    printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${COL_UPD}%-${W_M_VAL}s${C_DEF}\n" "📦" "APT Updates" "Total:" "$UPDATES"
+
+    local IFACE=$(ip route 2>/dev/null | $AWK '/default/ {print $5}' | head -n1)
+
+    if [ -n "$IFACE" ] && [ -r "/sys/class/net/$IFACE/statistics/rx_bytes" ]; then
+        if [ "$IS_CRON" == "true" ]; then
+            local RX_TOT=$(cat /sys/class/net/$IFACE/statistics/rx_bytes)
+            local TX_TOT=$(cat /sys/class/net/$IFACE/statistics/tx_bytes)
+            local RX_GB=$($AWK "BEGIN {printf \"%.1f\", $RX_TOT / 1073741824}")
+            local TX_GB=$($AWK "BEGIN {printf \"%.1f\", $TX_TOT / 1073741824}")
+            printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %-${W_M_VAL}s | ${C_YEL}%-7s${C_DEF} %s\n" "🌐" "Network ($IFACE)" "RxTot:" "${RX_GB}G" "TxTot:" "${TX_GB}G"
+        else
+            local RX1=$(cat /sys/class/net/$IFACE/statistics/rx_bytes)
+            local TX1=$(cat /sys/class/net/$IFACE/statistics/tx_bytes)
+            sleep 1
+            local RX2=$(cat /sys/class/net/$IFACE/statistics/rx_bytes)
+            local TX2=$(cat /sys/class/net/$IFACE/statistics/tx_bytes)
+            local RX_MBPS=$($AWK "BEGIN {printf \"%.1f\", ($RX2 - $RX1) * 8 / 1000000}")
+            local TX_MBPS=$($AWK "BEGIN {printf \"%.1f\", ($TX2 - $TX1) * 8 / 1000000}")
+            printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %-${W_M_VAL}s | ${C_YEL}%-7s${C_DEF} %s\n" "🌐" "Network ($IFACE)" "Down:" "${RX_MBPS}M" "Up:" "${TX_MBPS}M"
+        fi
+    fi
+}
+
+security_status() {
+    local ACTIVE_USERS=$(who 2>/dev/null | wc -l)
+    local REBOOT_REQ="No"
+    local COL_REBOOT=$C_GRN
+    if [ -f /var/run/reboot-required ]; then
+        REBOOT_REQ="Needed"
+        COL_REBOOT=$C_RED
+    fi
+    printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %-${W_M_VAL}s | ${C_YEL}%-7s${C_DEF} ${COL_REBOOT}%s${C_DEF}\n" "🔐" "Security & System" "Users:" "$ACTIVE_USERS" "Reboot:" "$REBOOT_REQ"
+}
+
+system_health() {
+    local FAILED_SRV=$(systemctl list-units --state=failed --no-legend 2>/dev/null | wc -l | xargs)
+    local ZOMBIES=$(ps axo stat 2>/dev/null | awk '$1=="Z" || $1=="Zs" {print $1}' | wc -l | xargs)
+
+    local COL_SRV=$C_GRN
+    [ "$FAILED_SRV" -gt 0 ] && COL_SRV=$C_RED
+    local COL_ZOM=$C_GRN
+    [ "$ZOMBIES" -gt 0 ] && COL_ZOM=$C_YEL
+
+    printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${COL_SRV}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${COL_ZOM}%s${C_DEF}\n" "🚑" "System Health" "SysErr:" "$FAILED_SRV" "Zombie:" "$ZOMBIES"
+}
+
+backup_status() {
+    local LAST_LOG=$(ls -tr /var/log/szakysave.log 2>/dev/null | tail -n 1)
+    local BACKUP_STATE="N/A"
+    local BACKUP_DATE="N/A"
+    local COL_BAK=$C_DEF
+
+    if [ -n "$LAST_LOG" ]; then
+        if [ -r "$LAST_LOG" ]; then
+            BACKUP_DATE=$(echo "$LAST_LOG" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -n 1)
+            [ -z "$BACKUP_DATE" ] && BACKUP_DATE=$(stat -c %y "$LAST_LOG" | cut -d' ' -f1)
+
+            if grep -Eq "Success" "$LAST_LOG" 2>/dev/null; then
+                BACKUP_STATE="OK"
+                COL_BAK=$C_GRN
+            else
+                BACKUP_STATE="ERR"
+                COL_BAK=$C_RED
+            fi
+        else
+            BACKUP_STATE="Unavail"
+            BACKUP_DATE="Read privilege missing"
+            COL_BAK=$C_RED
+        fi
+    else
+        BACKUP_STATE="None"
+    fi
+    printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${COL_BAK}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s\n" "🔄" "Backup Status" "State:" "$BACKUP_STATE" "Date:" "$BACKUP_DATE"
+}
+
+cpu_temp_usage(){
+    local STAT1=$(grep '^cpu ' /proc/stat)
+    sleep 0.4
+    local STAT2=$(grep '^cpu ' /proc/stat)
+
+    local ANY1=($STAT1)
+    local IDLE1=$(( ${ANY1[4]} + ${ANY1[5]} ))
+    local TOTAL1=0
+    for i in "${ANY1[@]:1}"; do TOTAL1=$((TOTAL1 + i)); done
+
+    local ANY2=($STAT2)
+    local IDLE2=$(( ${ANY2[4]} + ${ANY2[5]} ))
+    local TOTAL2=0
+    for i in "${ANY2[@]:1}"; do TOTAL2=$((TOTAL2 + i)); done
+
+    local DIFF_IDLE=$((IDLE2 - IDLE1))
+    local DIFF_TOTAL=$((TOTAL2 - TOTAL1))
+
+    local CPU_USAGE=0
+    if [ "$DIFF_TOTAL" -gt 0 ]; then
+        CPU_USAGE=$(( (DIFF_TOTAL - DIFF_IDLE) * 100 / DIFF_TOTAL ))
+    fi
+
+    local CPU_TEMP="N/A"
+
+    for z in /sys/class/thermal/thermal_zone*/temp; do
+    [ -r "$z" ] || continue
+
+    local t
+    t=$(cat "$z" 2>/dev/null)
+
+    if [[ "$t" =~ ^[0-9]+$ ]] && [ "$t" -gt 20000 ] && [ "$t" -lt 120000 ]; then
+        CPU_TEMP=$((t / 1000))
+        break
+    fi
+    done
+
+    local CPU_MODEL=$(lscpu 2>/dev/null | grep "Model name:" | $SED -r 's/Model name:\s+//; s/\(R\)//g; s/\(TM\)//g; s/ CPU//g; s/ @.*//g' | xargs)
+
+    local CPU_FREQ="N/A"
+    if [ -r /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq ]; then
+        CPU_FREQ=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq 2>/dev/null)
+        CPU_FREQ="$((CPU_FREQ / 1000)) MHz"
+    else
+        CPU_FREQ=$(lscpu 2>/dev/null | grep "CPU MHz:" | awk '{printf "%.0f MHz", $3}')
+    fi
+
+    local COL_CPU_U=$C_GRN
+    if [ "$CPU_USAGE" -ge 85 ]; then COL_CPU_U=$C_RED; elif [ "$CPU_USAGE" -ge 60 ]; then COL_CPU_U=$C_YEL; fi
+
+    local COL_CPU_T=$C_GRN
+    if [ "$CPU_TEMP" != "N/A" ]; then
+        if [ "$CPU_TEMP" -ge 75 ]; then COL_CPU_T=$C_RED; elif [ "$CPU_TEMP" -ge 65 ]; then COL_CPU_T=$C_YEL; fi
+    else
+        COL_CPU_T=$C_DEF
+    fi
+
+    local SHORT_CPU="${CPU_MODEL:0:$W_L}"
+    printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s\n" "⚙️" "$SHORT_CPU" "Freq:" "$CPU_FREQ"
+
+    local TEMP_DISP="${CPU_TEMP}"
+    [ "$CPU_TEMP" != "N/A" ] && TEMP_DISP="${CPU_TEMP}°C"
+    printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${COL_CPU_U}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${COL_CPU_T}%s${C_DEF}\n" "🔥" "CPU Status" "Usage:" "${CPU_USAGE}%" "Temp:" "${TEMP_DISP}"
+}
+
+memory(){
+    local MEM_AVAIL_MB=$(free -m 2>/dev/null | grep Mem | $AWK '{print $7}')
+    local MEM_AVAIL_PERC=$(free 2>/dev/null | grep Mem | $AWK '{print int($7/$2 * 100)}')
+
+    local COL_RAM=$C_GRN
+    if [ "$MEM_AVAIL_PERC" -le 10 ]; then COL_RAM=$C_RED; elif [ "$MEM_AVAIL_PERC" -le 20 ]; then COL_RAM=$C_YEL; fi
+
+    printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${COL_RAM}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s MB\n" "🧠" "RAM" "Free:" "${MEM_AVAIL_PERC}%" "Size:" "${MEM_AVAIL_MB}"
+}
+
+top_consumers() {
+    local TOP_CPU_NAME=$(ps -eo comm,%cpu --sort=-%cpu 2>/dev/null | head -n 2 | tail -n 1 | awk '{print $1}')
+    local TOP_CPU_PCT=$(ps -eo comm,%cpu --sort=-%cpu 2>/dev/null | head -n 2 | tail -n 1 | awk '{print $2"%"}')
+    local TOP_RAM_NAME=$(ps -eo comm,rss --sort=-rss 2>/dev/null | head -n 2 | tail -n 1 | awk '{print $1}')
+    local TOP_RAM_MB=$(ps -eo comm,rss --sort=-rss 2>/dev/null | head -n 2 | tail -n 1 | awk '{printf "%.0fMB", $2/1024}')
+    printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %-${W_M_VAL}s | ${C_YEL}%-7s${C_DEF} %s\n" "🎯" "Top Consumers" "CPU:" "${TOP_CPU_NAME} (${TOP_CPU_PCT})" "RAM:" "${TOP_RAM_NAME} (${TOP_RAM_MB})"
+}
+
+disk_status() {
+    local NAME="$1"
+    local DEV="$2"
+    local ROTA="$3"
+
+    local ICON="💽"
+    [ "$ROTA" -eq 1 ] && ICON="💾"
+
+    if command -v "$SMARTCTL" >/dev/null 2>&1; then
+        local SMART_DATA=$(sudo -n "$SMARTCTL" -a "$DEV" 2>/dev/null)
+
+        if [ -z "$SMART_DATA" ]; then
+            printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${C_RED}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${C_RED}%s${C_DEF}\n" \
+                "$ICON" "$NAME" "Temp:" "N/A" "Info:" "Sudo privilege missing"
+            return
+        fi
+
+        local TEMP=$(echo "$SMART_DATA" | grep -i "Temperature" | head -n 1 | awk '{print $10}' | cut -d' ' -f1 | sed 's/[^0-9]//g')
+        [ -z "$TEMP" ] && TEMP="N/A"
+
+        local COL_TEMP=$C_GRN
+        if [ "$TEMP" != "N/A" ]; then
+            if [ "$TEMP" -ge 50 ]; then COL_TEMP=$C_RED; elif [ "$TEMP" -ge 40 ]; then COL_TEMP=$C_YEL; fi
+        else
+            COL_TEMP=$C_DEF
+        fi
+
+        if [ "$ROTA" -eq 1 ]; then
+            local PENDING=$(echo "$SMART_DATA" | awk '$2=="Current_Pending_Sector" {print $10}')
+            local REALLOC=$(echo "$SMART_DATA" | awk '$2=="Reallocated_Sector_Ct" {print $10}')
+            PENDING=${PENDING:-0}
+            REALLOC=${REALLOC:-0}
+
+            local COL_SMART=$C_GRN
+            if [ "$PENDING" -gt 0 ] || [ "$REALLOC" -gt 0 ]; then COL_SMART=$C_RED; fi
+
+            printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${COL_TEMP}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${COL_SMART}%-4s${C_DEF} (Realloc: ${COL_SMART}%s${C_DEF})\n" \
+                "$ICON" "$NAME" "Temp:" "${TEMP}°C" "Pend:" "$PENDING" "$REALLOC"
+
+            local HOURS=$(echo "$SMART_DATA" | awk '$2=="Power_On_Hours" {print $10}')
+            local CYCLES=$(echo "$SMART_DATA" | awk '$2=="Power_Cycle_Count" {print $10}')
+            HOURS=${HOURS:-0}
+            CYCLES=${CYCLES:-0}
+
+            local COL_HOURS=$C_GRN
+            if [ "$HOURS" -gt 40000 ]; then COL_HOURS=$C_RED; elif [ "$HOURS" -gt 20000 ]; then COL_HOURS=$C_YEL; fi
+
+            local SUB_LABEL="└─► Runtime"
+            local SUB_LEN=${#SUB_LABEL}
+            local SUB_PAD=$(( W_L - SUB_LEN ))
+            [ "$SUB_PAD" -lt 0 ] && SUB_PAD=0
+            local SUB_PADDED=$(printf '%s%*s' "$SUB_LABEL" "$SUB_PAD" "")
+
+            printf "     ${C_CYN}%s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${COL_HOURS}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s\n" \
+                "$SUB_PADDED" "Hours:" "$HOURS h" "Cycles:" "$CYCLES"
+        else
+            printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${COL_TEMP}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s\n" \
+                "$ICON" "$NAME" "Temp:" "${TEMP}°C" "Type:" "SSD"
+        fi
+    else
+        printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${C_RED}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${C_RED}%s${C_DEF}\n" \
+            "$ICON" "$NAME" "Temp:" "N/A" "Cmd:" "Missing smartctl"
+    fi
+}
+
+vg_info(){
+    if command -v "$VG_CMD" >/dev/null 2>&1; then
+        local VGS_OUT=$(sudo -n "$VG_CMD" --quiet --noheadings -o vg_name,vg_free,vg_size 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            if [ -n "$VGS_OUT" ]; then
+                echo "$VGS_OUT" | while read -r VG_NAME VG_FREE VG_SIZE; do
+                    [ -n "$VG_NAME" ] && printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${C_GRN}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s\n" "🗄️" "VG: $VG_NAME" "Free:" "$VG_FREE" "Size:" "$VG_SIZE"
+                done
+            else
+                printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${C_DEF}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s\n" "🗄️" "Volume Groups" "State:" "None" "Setup:" "Required"
+            fi
+        else
+            printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${C_RED}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s\n" "🗄️" "Volume Groups" "State:" "N/A" "Info:" "Sudo privilege missing"
+        fi
+    fi
+}
+
+mount_usage() {
+    local MOUNT="${1:0:42}"
+    local REAL_PATH="$1"
+    local DF_DATA=$(df -h "$REAL_PATH" 2>/dev/null | tail -n1)
+    local FREE=$(echo "$DF_DATA" | $AWK '{print $4}')
+    local USAGE_PERC=$(echo "$DF_DATA" | $AWK '{print $5}')
+    local USAGE_NUM=$(echo "$USAGE_PERC" | $SED 's/%//')
+
+    if [ -n "$USAGE_NUM" ]; then
+        local COL_USAGE=$C_GRN
+        if [ "$USAGE_NUM" -ge 90 ]; then COL_USAGE=$C_RED; elif [ "$USAGE_NUM" -ge 75 ]; then COL_USAGE=$C_YEL; fi
+        printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${COL_USAGE}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s\n" "📁" "$MOUNT" "Usage:" "${USAGE_NUM}%" "Free:" "$FREE"
+    fi
+}
+
+raid_state(){
+    if [ -r /proc/mdstat ]; then
+        local MD_LINES=$(grep -E '^md[0-9]+ :' /proc/mdstat)
+        if [ -z "$MD_LINES" ]; then
+            printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${C_DEF}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s\n" "🛡️" "RAID Arrays" "State:" "None" "SRun:" "Setup Required!"
+        else
+            echo "$MD_LINES" | while read -r line; do
+                local MD_DEV=$(echo "$line" | awk '{print $1}')
+                local MD_STATUS_LINE=$(grep -A 1 "^$MD_DEV :" /proc/mdstat | tail -n 1)
+
+                if echo "$MD_STATUS_LINE" | grep -q "\[.*_.*\]"; then
+                    printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${C_RED}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${C_RED}%s${C_DEF}\n" "⚠️" "RAID: $MD_DEV" "State:" "ERR" "Degrad:" "YES"
+                else
+                    printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${C_GRN}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s\n" "🛡️" "RAID: $MD_DEV" "State:" "OK" "Degrad:" "No"
+                fi
+            done
+        fi
+    else
+        printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${C_DEF}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s\n" "🛡️" "RAID Arrays" "State:" "N/A" "SRun:" "Setup required!"
+    fi
+}
+
+containers(){
+    if command -v docker >/dev/null 2>&1; then
+        local DOCKER_CMD="docker"
+
+        if ! docker ps >/dev/null 2>&1; then
+            if sudo -n docker ps >/dev/null 2>&1; then
+                DOCKER_CMD="sudo -n docker"
+            else
+                printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${C_RED}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s\n" "🐳" "Docker Containers" "State:" "N/A" "Info:" "Sudo privilege missing"
+                return
+            fi
+        fi
+
+        local RUNNING=$($DOCKER_CMD ps -q | wc -l)
+        local TOTAL=$($DOCKER_CMD ps -a -q | wc -l)
+
+        if [ "$RUNNING" -eq "$TOTAL" ]; then
+            printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${C_GRN}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s\n" "🐳" "Docker Containers" "State:" "OK" "Run:" "$RUNNING/$TOTAL"
+        else
+            printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${C_RED}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s\n" "⚠️" "Docker Containers" "State:" "ERR" "Run:" "$RUNNING/$TOTAL"
+
+            local STOPPED=$($DOCKER_CMD ps -a --filter "status=exited" --format "{{.Names}}" | tr '\n' ',' | $SED 's/,$//')
+            if [ -n "$STOPPED" ]; then
+                printf " %b  ${C_RED}%s${C_DEF}\n" "❌" "Stopped containers: $STOPPED"
+            fi
+        fi
+    else
+         printf " %b  ${C_CYN}%-${W_L}s${C_DEF} | ${C_YEL}%-7s${C_DEF} ${C_GRN}%-${W_M_VAL}s${C_DEF} | ${C_YEL}%-7s${C_DEF} %s\n" "🐳" "Docker Containers" "State:" "N/A" "Run:" "Setup required!"
+    fi
+}
+
+run_szakyfetch() {
+    print_line_eq
+
+    local TEXT="📊 Szakyfetch Status Report: $(date '+%Y-%m-%d %H:%M:%S')"
+    local TEXT_VISUAL_LEN=$(( ${#TEXT} + 1 ))
+    local PAD_TOTAL=$(( LINE_LEN - TEXT_VISUAL_LEN - 6 ))
+    local PAD_LEFT=$(( PAD_TOTAL / 2 ))
+    local PAD_RIGHT=$(( PAD_TOTAL - PAD_LEFT ))
+
+    printf "${C_CYN}${C_BOLD}===%${PAD_LEFT}s%s%${PAD_RIGHT}s===${C_DEF}\n" "" "$TEXT" ""
+
+    print_line_eq
+
+    system_info
+    security_status
+    system_health
+    backup_status
+    print_line_dash
+
+    cpu_temp_usage
+    memory
+    top_consumers
+    print_line_dash
+
+    local DISKS=$(lsblk -d -n -o NAME,TYPE 2>/dev/null | awk '$2=="disk" {print $1}' | grep -v -E '^loop|^ram|^fd|^sr')
+    local DISK
+    for DISK in $DISKS; do
+        local ROTA=$(cat /sys/block/$DISK/queue/rotational 2>/dev/null || echo 0)
+        local MODEL=$(lsblk -d -n -o MODEL /dev/$DISK 2>/dev/null | xargs)
+        [ -z "$MODEL" ] && MODEL="Unknown Drive"
+
+        local DEV_SUFFIX="($DISK)"
+        local MAX_MODEL_LEN=$(( W_L - ${#DEV_SUFFIX} - 1 ))
+        local DISK_NAME=$(printf "%-${MAX_MODEL_LEN}s %s" "${MODEL:0:$MAX_MODEL_LEN}" "$DEV_SUFFIX")
+
+        disk_status "$DISK_NAME" "/dev/$DISK" "$ROTA"
+    done
+    print_line_dash
+
+    vg_info
+    print_line_dash
+
+    local MOUNTS=$(df -h 2>/dev/null | awk '$1 ~ /^(\/dev\/|.*:)/ {print $NF}' | grep -vE '^/boot|^/run|^/dev|^/mnt' | sort -u)
+    local MOUNT
+    for MOUNT in $MOUNTS; do
+        mount_usage "$MOUNT"
+    done
+    print_line_dash
+
+    raid_state
+    containers
+    print_line_eq
+}

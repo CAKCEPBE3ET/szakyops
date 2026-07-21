@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+#  Project:     Szakyops 
+#  File:        modules/szakylog
+#  Description: Logmanager module
+#  Author:      Stephen Szaky (info@szakysoft.hu)
+#  Website:     https://szakysoft.hu
+#  Version:     1.0.2
+#  License:     MIT
+# ==============================================================================
+
+
+run_szakylog() {
+    if [[ $EUID -ne 0 ]]; then
+        echo -e "\n\033[1;31mError: Log Viewer requires root privileges. Please run szakyops with sudo!\033[0m"
+        return 1
+    fi
+
+    C_DEF='\033[0m'
+    C_RED='\033[1;31m'
+    C_GRN='\033[1;32m'
+    C_YEL='\033[1;33m'
+    C_CYN='\033[1;36m'
+    C_BOLD='\033[1m'
+    LINE_LEN=88
+
+    print_line_eq() { printf "${C_CYN}${C_BOLD}%${LINE_LEN}s${C_DEF}\n" "" | tr ' ' '='; }
+
+    CONFIG_FILE="/opt/szakyops/config/szakyops.conf"
+    if [[ -f "$CONFIG_FILE" ]]; then
+        source "$CONFIG_FILE"
+    fi
+
+    FETCH_LOG=${FETCH_LOG:-"/var/log/szakyfetch.log"}
+    SAVE_LOG=${SAVE_LOG:-"/var/log/szakysave.log"}
+
+    while true; do
+        clear
+        print_line_eq
+        echo -e "  ${C_CYN}${C_BOLD}📖 SZAKYOPS: Interactive Log Viewer & Exporter 📖${C_DEF}"
+        print_line_eq
+        echo ""
+        echo -e "  [1] View Monitoring Log (Fetch)"
+        echo -e "  [2] View Backup Process Log (Save)"
+        echo -e "  [3] Export Logs (Full or Filtered)"
+        echo -e "  [4] Return to Main Menu"
+        echo ""
+        print_line_eq
+        echo ""
+        read -r -p "  Select an option [1-4]: " LOG_CHOICE
+
+        case "$LOG_CHOICE" in
+            1)
+                if [ -f "$FETCH_LOG" ]; then
+                    less -R +G "$FETCH_LOG"
+                else
+                    echo -e "\n  ${C_RED}Error:${C_DEF} Monitoring log file does not exist yet."
+                    read -r -p "  Press [Enter] to continue..."
+                fi
+                ;;
+            2)
+                if [ -f "$SAVE_LOG" ]; then
+                    less -R +G "$SAVE_LOG"
+                else
+                    echo -e "\n  ${C_RED}Error:${C_DEF} Backup log file does not exist yet."
+                    read -r -p "  Press [Enter] to continue..."
+                fi
+                ;;
+            3)
+                echo -e "\n  ${C_CYN}📊 Select Source Log for Export:${C_DEF}"
+                echo -e "  [1] Monitoring Log ($FETCH_LOG)"
+                echo -e "  [2] Backup Log ($SAVE_LOG)"
+                read -r -p "  Choice [1-2]: " SRC_CHOICE
+
+                local selected_log=""
+                case "$SRC_CHOICE" in
+                    1) selected_log="$FETCH_LOG" ;;
+                    2) selected_log="$SAVE_LOG" ;;
+                    *) echo -e "${C_RED}Invalid choice.${C_DEF}" && sleep 2 && continue ;;
+                esac
+
+                if [ ! -f "$selected_log" ]; then
+                    echo -e "\n  ${C_RED}Error:${C_DEF} Source log file does not exist."
+                    read -r -p "  Press [Enter] to continue..."
+                    continue
+                fi
+
+                echo -e "\n  ${C_BOLD}Filter examples:${C_DEF}"
+                echo -e "  - Specific time/date: ${C_YEL}12:03${C_DEF} or ${C_YEL}2026-07-20${C_DEF}"
+                echo -e "  - Interval: ${C_YEL}10:30-10:36${C_DEF}"
+#                echo -e "  - Yellow/Red warnings: ${C_RED}alert${C_DEF} or ${C_YEL}warning${C_DEF}"
+                echo -e "  - Leave empty for FULL export"
+                printf "\n  ${C_CYN}Enter search keyword/date/interval or press [Enter]:${C_DEF} "
+                read -r KEYWORD
+
+                local default_out="/tmp/szakyops_export_$(date '+%Y%m%d_%H%M%S').txt"
+                printf "  ${C_CYN}Enter Destination Path${C_DEF} [$default_out]: "
+                read -r OUT_PATH
+                OUT_PATH=${OUT_PATH:-"$default_out"}
+
+                local tmp_filtered=$(mktemp)
+
+                if [ -z "$KEYWORD" ]; then
+                    cat "$selected_log" > "$tmp_filtered"
+#Removed v1.0.1
+#                elif [[ "$KEYWORD" == "alert" || "$KEYWORD" == "warning" ]]; then
+ #                   awk '
+  #                      BEGIN { RS="===\n"; ORS="===\n" }
+   #                     /\033\[(1;)?31m|\033\[(1;)?33m|⚠️|❌/ { print }
+    #                ' "$selected_log" > "$tmp_filtered" || true
+                else
+                    if [[ "$KEYWORD" =~ :.*-.*: ]]; then # Modified v1.0.1
+                        START_TIME=$(echo "$KEYWORD" | cut -d'-' -f1)
+                        END_TIME=$(echo "$KEYWORD" | cut -d'-' -f2)
+
+                        awk -v start="$START_TIME" -v end="$END_TIME" '
+                            $0 ~ "Status Report:" || $0 ~ "📊 Szakyfetch Status Report:" {
+                                match($0, /[0-2][0-9]:[0-5][0-9]/)
+                                if (RSTART > 0) {
+                                    t = substr($0, RSTART, 5)
+                                    if (t >= start && t <= end) {
+                                        p=1
+                                    } else {
+                                        p=0
+                                    }
+                                }
+                            }
+                            p { print }
+                        ' "$selected_log" > "$tmp_filtered" || true
+                    else
+                        awk -v search="$KEYWORD" '
+                            $0 ~ "Status Report:" || $0 ~ "📊 Szakyfetch Status Report:" {
+                                if ($0 ~ search) {
+                                    p=1
+                                } else {
+                                    p=0
+                                }
+                            }
+                            p { print }
+                        ' "$selected_log" > "$tmp_filtered" || true
+                    fi
+                fi
+
+                sed -E 's/\x1B\[[0-9;]*[a-zA-Z]//g; s/\x1B\(B//g; s/\x1B\[\?25[hl]//g; s/\x1B[0-9]//g; s/\r//g' "$tmp_filtered" > "$OUT_PATH" || true
+                rm -f "$tmp_filtered"
+
+                if [ -s "$OUT_PATH" ] && [ "$(wc -l < "$OUT_PATH")" -gt 2 ]; then
+                    echo -e "\n  ${C_GRN}Success:${C_DEF} Exported to $OUT_PATH"
+                else
+                    echo -e "\n  ${C_YEL}Warning:${C_DEF} No matches found or file is empty."
+                    rm -f "$OUT_PATH"
+                fi
+                read -r -p "  Press [Enter] to continue..."
+                ;;
+            4)
+                return 0
+                ;;
+            *)
+                echo -e "\n  ${C_RED}Invalid option!${C_DEF}"
+                sleep 2
+                ;;
+        esac
+    done
+}

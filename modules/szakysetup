@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+#  Project:     Szakyops 
+#  File:        modules/szakysetup
+#  Description: Interactive configurator for szakysave
+#  Author:      Stephen Szaky (info@szakysoft.hu)
+#  Website:     https://szakysoft.hu
+#  Version:     1.0.2
+#  License:     MIT
+# ==============================================================================
+
+
+set -e
+
+C_DEF='\033[0m'
+C_YEL='\033[1;33m'
+C_GRN='\033[1;32m'
+C_CYN='\033[1;36m'
+C_BOLD='\033[1m'
+LINE_LEN=98
+
+print_line_eq() { printf "${C_CYN}${C_BOLD}%${LINE_LEN}s${C_DEF}\n" "" | tr ' ' '='; }
+
+clear
+print_line_eq
+TITLE="💾 SZAKYOPS: Backup Configuration Wizard 💾"
+TITLE_LEN=${#TITLE}
+PAD_TOTAL=$(( LINE_LEN - TITLE_LEN - 6 ))
+PAD_LEFT=$(( PAD_TOTAL / 2 ))
+PAD_RIGHT=$(( PAD_TOTAL - PAD_LEFT ))
+printf "${C_CYN}${C_BOLD}===%${PAD_LEFT}s%s%${PAD_RIGHT}s===${C_DEF}\n" "" "$TITLE" ""
+print_line_eq
+echo ""
+
+printf "  ${C_CYN}%-45s${C_DEF}: " "1. Target IP or domain (target)"
+read -r TARGET
+
+printf "  ${C_CYN}%-45s${C_DEF}: " "2. Target username (target_user)"
+read -r TARGET_USER
+
+printf "  ${C_CYN}%-45s${C_DEF}: " "3. Target destination path (target_dest)"
+read -r TARGET_DEST
+
+#Modified/Created v1.0.1
+REAL_USER="${SUDO_USER:-$USER}"
+REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
+DEFAULT_KEY="${REAL_HOME:-$HOME}/.ssh/id_ed25519"
+
+printf "  ${C_CYN}%-45s${C_DEF} :\n  [Default key: %s] " "4. SSH key path (ssh_key)" "$DEFAULT_KEY"
+read -r SSH_KEY
+SSH_KEY=${SSH_KEY:-$DEFAULT_KEY}
+#########################
+
+printf "  ${C_CYN}%-45s${C_DEF}: " "5. Source paths (space separated)"
+read -r INPUT_SOURCES
+
+printf "  ${C_CYN}%-45s${C_DEF} (y/N): " "Is the target a Windows host? (win_target)"
+read -r WIN_CHOICE
+if [[ "$WIN_CHOICE" =~ ^[Yy]$ ]]; then
+    IS_WINDOWS="true"
+else
+    IS_WINDOWS="false"
+fi
+
+printf "  ${C_CYN}%-45s${C_DEF} (y/N): " "Enable Wake-on-LAN for target? (use_wol)"
+read -r WOL_CHOICE
+TARGET_MAC=""
+if [[ "$WOL_CHOICE" =~ ^[Yy]$ ]]; then
+    USE_WOL="true"
+    printf "  ${C_CYN}%-45s${C_DEF}: " "   -> Enter Target MAC address"
+    read -r TARGET_MAC
+else
+    USE_WOL="false"
+fi
+
+CONFIG_DIR="/opt/szakyops/config"
+CONFIG_FILE="$CONFIG_DIR/szakyops.conf"
+
+if [ ! -d "/opt/szakyops" ] || [ ! -w "/opt/szakyops" ]; then
+    echo -e "\n${C_YEL}Configuring /opt/szakyops directory permissions (requires sudo)...${C_DEF}"
+    sudo mkdir -p "$CONFIG_DIR"
+    sudo chown -R "$USER:$USER" /opt/szakyops
+fi
+
+mkdir -p "$CONFIG_DIR"
+
+cat << EOF > "$CONFIG_FILE"
+TARGET="$TARGET"
+TARGET_USER="$TARGET_USER"
+TARGET_DEST="$TARGET_DEST"
+TARGET_SSH_KEY="$SSH_KEY"
+IS_WINDOWS="$IS_WINDOWS"
+USE_WOL="$USE_WOL"
+TARGET_MAC="$TARGET_MAC"
+SOURCES=($INPUT_SOURCES)
+EOF
+
+if [ "$USE_WOL" == "true" ] && [ "$IS_WINDOWS" != "true" ]; then
+    echo -e "\n${C_YEL}Automatically preparing remote target for passwordless shutdown...${C_DEF}"
+    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no -t "$TARGET_USER@$TARGET" \
+        "echo '$TARGET_USER ALL=(ALL) NOPASSWD: /usr/sbin/poweroff, /usr/sbin/shutdown' | sudo tee /etc/sudoers.d/szakyops-shutdown > /dev/null" || echo -e "${C_RED}Warning: Remote shutdown prep failed. You might need to set it up manually.${C_DEF}"
+fi
+
+echo ""
+print_line_eq
+echo -e "  ${C_GRN}Success:${C_DEF} Configuration saved to $CONFIG_FILE"
+print_line_eq
