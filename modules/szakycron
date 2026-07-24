@@ -39,7 +39,7 @@ run_szakycron() {
     FETCH_CMD="env TERM=xterm-256color IS_CRON=true bash $SCRIPT_DIR/szakyops --fetch >> $FETCH_LOG 2>&1"
     #Modified v1.1.0
     REAL_USER="${SUDO_USER:-$USER}"
-    SAVE_CMD="env TERM=xterm-256color IS_CRON=true sudo -u $REAL_USER bash -c 'source $SCRIPT_DIR/modules/szakysave && run_szakysave' >> $SAVE_LOG 2>&1"
+    SAVE_CMD="env TERM=xterm-256color IS_CRON=true bash -c 'source $SCRIPT_DIR/modules/szakysave && run_szakysave' >> $SAVE_LOG 2>&1"
     ################
     while true; do
         clear
