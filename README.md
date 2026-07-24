@@ -1,6 +1,8 @@
 # Szakyops v1.1.0
 ### An integrated system for system monitoring and automated backups
 
+<img width="936" height="641" alt="image" src="https://github.com/user-attachments/assets/f0963a2d-e4b0-4723-8e09-1af146db80a2" />
+
 Thank you for visiting the project page or downloading Szakyops!
 
 Szakyops is a lightweight, resource-efficient toolset designed for Linux servers. It features **szakyfetch**, a minimal system monitoring module built entirely on native Linux commands, and **szakysave**, an automated, incremental backup utility that securely transfers your data to another machine using `rsync` and `ssh`. 
