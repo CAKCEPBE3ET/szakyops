@@ -39,4 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Target cleanup on failure**: Incomplete backup directories are automatically removed from the target machine (Windows & Linux compatible) if the rsync session fails or gets cancelled.
 - **Process locking**: Prevents overlapping execution using `/tmp/szakyops.lock` via `flock`.
 
+## [v1.1.1] - 2026-07-24 
 
+### Fixed
+- **Installer Data Loss:** Fixed `install.sh` accidentally deleting local cloned repositories during installation.
+- **Uninstaller Cron Cleanup:** Fixed uninstaller regex to properly remove both fetch and `run_szakysave` cron jobs.
+- **Cold Backup Non-Interactive Privileges:** Added non-interactive `sudo -n` fallbacks for Docker and systemd service checks and lifecycle commands (`start`/`stop`).

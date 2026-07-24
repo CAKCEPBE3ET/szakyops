@@ -6,7 +6,7 @@
 #  Description: Uninstaller of Szakyops
 #  Author:      Stephen/Szaky (info@szakysoft.hu)
 #  Website:     https://szakysoft.hu
-#  Version:     1.1.0
+#  Version:     1.1.1
 #  License:     MIT
 # ==============================================================================
 
@@ -29,7 +29,7 @@ echo "Removing scheduled cron jobs..."
 for target_user in root "${SUDO_USER:-}"; do
     [ -z "$target_user" ] && continue
     tmp_cron=$(mktemp)
-    crontab -u "$target_user" -l 2>/dev/null | grep -v -F "/opt/szakyops/szakyops" > "$tmp_cron" || true
+    crontab -u "$target_user" -l 2>/dev/null | grep -v -E "/opt/szakyops/szakyops|run_szakysave" > "$tmp_cron" || true #Modified v1.1.1
     if [ -s "$tmp_cron" ]; then
         crontab -u "$target_user" "$tmp_cron"
     else

@@ -6,7 +6,7 @@
 #  Description: Simple backup program for szakyops
 #  Author:      Stephen Szaky (info@szakysoft.hu)
 #  Website:     https://szakysoft.hu
-#  Version:     1.1.0
+#  Version:     1.1.1
 #  License:     MIT
 # ==============================================================================
 
@@ -77,6 +77,133 @@ run_szakysave() {
 
         print_row "❌" "Target Status" "State:" "${C_RED}Offline${C_DEF}" "Wait:" "Timeout"
         return 1
+    }
+
+    do_backup() {
+        #Created v1.1.0
+        exec 200>/tmp/szakyops.lock
+        flock -n 200 || {
+            echo -e "${C_RED}Another backup session is already running!${C_DEF}"
+            return 1
+        }
+        ###############
+        local TIMESTAMP=$(date '+%Y-%m-%d_%H-%M-%S')
+        local TIMESTAMP_DEST="$TARGET_DEST/$TIMESTAMP"
+        local SRC_COUNT="${#SOURCES[@]}"
+
+        print_row "🔄" "Backup Process" "Sources:" "${SRC_COUNT} items" "Dest:" "$TIMESTAMP_DEST"
+
+        echo -e " ${C_CYN}--- [ Target Sources ] ---${C_DEF}"
+        for src in "${SOURCES[@]}"; do
+            echo -e "  ${C_YEL}📁${C_DEF} $src"
+        done
+
+        ssh -i "$TARGET_SSH_KEY" -o StrictHostKeyChecking=no "$TARGET_USER@$TARGET" "mkdir -p \"$TIMESTAMP_DEST\""
+
+        local RAW_PREV=$(ssh -i "$TARGET_SSH_KEY" -o StrictHostKeyChecking=no "$TARGET_USER@$TARGET" "ls -1d $TARGET_DEST/20* 2>/dev/null | grep -v '$TIMESTAMP' | sort -V | tail -n 1")
+        local PREV_DIR=$(echo "$RAW_PREV" | tr -d '\r' | tr -d '\n')
+
+        local LINK_DEST_ARG=""
+        if [ -n "$PREV_DIR" ]; then
+            local PREV_BASE=$(basename "$PREV_DIR")
+            echo -e "${C_CYN}Linking against previous backup: $PREV_BASE (Zero-space transfer!)${C_DEF}"
+            LINK_DEST_ARG="--link-dest=../$PREV_BASE"
+        else
+            echo -e "${C_YEL}No previous backup found. Full transfer will occur!${C_DEF}"
+        fi
+
+        #CREATED v1.1.0
+        local RUNNING_DB_CONTAINERS=$(sudo -n docker ps --filter "status=running" --format "{{.Names}}" 2>/dev/null | grep -E -i "db|mysql|postgres|mariadb|redis|mongo" || true)
+        local RUNNING_NATIVE_DBS=$(systemctl list-units --type=service --state=running 2>/dev/null | grep -E -i "mysql|postgresql|mariadb|redis|mongod" | awk '{print $1}' || true)
+        
+        cleanup_databases(){
+            if [ "${RSYNC_EXIT:-1}" -ne 0 ] && [ -n "$TIMESTAMP_DEST" ]; then
+                echo -e "\n${C_RED}⚠️ Backup interrupted/failed! Cleaning up incomplete backup on target...${C_DEF}"
+
+                if [ "$IS_WINDOWS" == "true" ]; then
+                    local WIN_CLEAN_PATH=$(echo "$TIMESTAMP_DEST" | sed -E 's/^\/([a-zA-Z])\//\1:\\/' | tr '/' '\\')
+                    ssh -n -i "$TARGET_SSH_KEY" -o StrictHostKeyChecking=no "$TARGET_USER@$TARGET" "powershell -Command \"Remove-Item -Recurse -Force '$WIN_CLEAN_PATH' -ErrorAction SilentlyContinue\"" 2>/dev/null || true
+                else
+                    ssh -n -i "$TARGET_SSH_KEY" -o StrictHostKeyChecking=no "$TARGET_USER@$TARGET" "rm -rf \"$TIMESTAMP_DEST\"" 2>/dev/null || true
+                fi
+                TIMESTAMP_DEST=""
+            fi
+
+            if [ -n "$RUNNING_DB_CONTAINERS" ]; then
+                echo -e "${C_GRN}▶️  Restarting Docker databases...${C_DEF}"
+                echo "$RUNNING_DB_CONTAINERS" | xargs -r -d '\n' sudo -n docker start >/dev/null 2>&1
+            fi
+
+            if [ -n "$RUNNING_NATIVE_DBS" ]; then
+                echo -e "${C_GRN}▶️  Restarting native databases...${C_DEF}"
+                echo "$RUNNING_NATIVE_DBS" | xargs -r -d '\n' sudo -n systemctl start >/dev/null 2>&1
+            fi
+        }
+
+        trap cleanup_databases EXIT INT TERM
+
+        if [ -n "$RUNNING_DB_CONTAINERS" ] || [ -n "$RUNNING_NATIVE_DBS" ]; then
+            echo -e "${C_YEL}⏸️  Shutting down live databases (Cold Backup)...${C_DEF}"
+
+            if [ -n "$RUNNING_DB_CONTAINERS" ]; then
+                echo -e "  ${C_CYN}Shutting down Docker DBs:${C_DEF} $(echo $RUNNING_DB_CONTAINERS | tr '\n' ' ')"
+                echo "$RUNNING_DB_CONTAINERS" | xargs -r -d '\n' sudo -n docker stop >/dev/null 2>&1
+            fi
+
+            if [ -n "$RUNNING_NATIVE_DBS" ]; then
+                echo -e "  ${C_CYN}Shutting down Native DBs:${C_DEF} $(echo $RUNNING_NATIVE_DBS | tr '\n' ' ')"
+                echo "$RUNNING_NATIVE_DBS" | xargs -r -d '\n' sudo -n systemctl stop >/dev/null 2>&1
+            fi
+        fi
+        ################################
+
+        echo -e "${C_YEL}--- [ Rsync Transfer Progress ] ---${C_DEF}"
+
+        if [ "$IS_WINDOWS" == "true" ]; then
+            rsync -rtvR \
+                --info=progress2,flist2 \
+                --no-compress \
+                --no-owner \
+                --no-group \
+                --no-perms \
+                --no-links \
+                --size-only \
+                --modify-window=2 \
+                --iconv=utf-8,utf-8 \
+                $LINK_DEST_ARG \
+                -e "ssh -i $TARGET_SSH_KEY -o StrictHostKeyChecking=no" \
+                --rsync-path="\"$WIN_RSYNC_PATH\"" \
+                "${SOURCES[@]}" \
+                "$TARGET_USER@$TARGET:$TIMESTAMP_DEST"
+        else
+            rsync -aR \
+                --info=progress2 \
+                --no-compress \
+                --no-owner \
+                --no-group \
+                --no-perms \
+                --modify-window=2 \
+                --iconv=utf-8,utf-8 \
+                $LINK_DEST_ARG \
+                -e "ssh -i $TARGET_SSH_KEY -o StrictHostKeyChecking=no" \
+                "${SOURCES[@]}" \
+                "$TARGET_USER@$TARGET:$TIMESTAMP_DEST"
+        fi
+
+        local RSYNC_EXIT=$?
+        #Created v1.1.0
+        cleanup_databases
+        trap - EXIT INT TERM
+        ####################
+
+        echo -e "\n${C_YEL}-----------------------------------${C_DEF}"
+
+        if [ $RSYNC_EXIT -eq 0 ]; then
+            print_row "💾" "Rsync Status" "Result:" "${C_GRN}Success${C_DEF}" "Exit:" "0"
+            test_restore "$TIMESTAMP_DEST"
+        else
+            print_row "💾" "Rsync Status" "Result:" "${C_RED}Failed${C_DEF}" "Exit:" "$RSYNC_EXIT"
+        fi
     }
 
     test_restore() {
@@ -155,132 +282,6 @@ run_szakysave() {
         done <<< "$REMOTE_FILES"
 
         rm -rf "$RESTORE_TMP"
-    }
-
-    do_backup() {
-	#Created v1.1.0
-	exec 200>/tmp/szakyops.lock
-	flock -n 200 || {
-	    echo -e "${C_RED}Another backup session is already running!${C_DEF}"
-	    return 1
-	}
-	###############
-        local TIMESTAMP=$(date '+%Y-%m-%d_%H-%M-%S')
-        local TIMESTAMP_DEST="$TARGET_DEST/$TIMESTAMP"
-        local SRC_COUNT="${#SOURCES[@]}"
-
-        print_row "🔄" "Backup Process" "Sources:" "${SRC_COUNT} items" "Dest:" "$TIMESTAMP_DEST"
-
-        echo -e " ${C_CYN}--- [ Target Sources ] ---${C_DEF}"
-        for src in "${SOURCES[@]}"; do
-            echo -e "  ${C_YEL}📁${C_DEF} $src"
-        done
-
-        ssh -i "$TARGET_SSH_KEY" -o StrictHostKeyChecking=no "$TARGET_USER@$TARGET" "mkdir -p \"$TIMESTAMP_DEST\""
-
-        local RAW_PREV=$(ssh -i "$TARGET_SSH_KEY" -o StrictHostKeyChecking=no "$TARGET_USER@$TARGET" "ls -1d $TARGET_DEST/20* 2>/dev/null | grep -v '$TIMESTAMP' | sort -V | tail -n 1")
-        local PREV_DIR=$(echo "$RAW_PREV" | tr -d '\r' | tr -d '\n')
-
-        local LINK_DEST_ARG=""
-        if [ -n "$PREV_DIR" ]; then
-            local PREV_BASE=$(basename "$PREV_DIR")
-            echo -e "${C_CYN}Linking against previous backup: $PREV_BASE (Zero-space transfer!)${C_DEF}"
-            LINK_DEST_ARG="--link-dest=../$PREV_BASE"
-        else
-            echo -e "${C_YEL}No previous backup found. Full transfer will occur!${C_DEF}"
-        fi
-
-        #CREATED v1.1.0
-        local RUNNING_DB_CONTAINERS=$(docker ps --filter "status=running" --format "{{.Names}}" 2>/dev/null | grep -E -i "db|mysql|postgres|mariadb|redis|mongo" || true)
-        local RUNNING_NATIVE_DBS=$(systemctl list-units --type=service --state=running 2>/dev/null | grep -E -i "mysql|postgresql|mariadb|redis|mongod" | awk '{print $1}' || true)
-	cleanup_databases(){
-	    if [ "${RSYNC_EXIT:-1}" -ne 0 ] && [ -n "$TIMESTAMP_DEST" ]; then
-		echo -e "\n${C_RED}⚠️ Backup interrupted/failed! Cleaning up incomplete backup on target...${C_DEF}"
-
-                if [ "$IS_WINDOWS" == "true" ]; then
-		    local WIN_CLEAN_PATH=$(echo "$TIMESTAMP_DEST" | sed -E 's/^\/([a-zA-Z])\//\1:\\/' | tr '/' '\\')
-                    ssh -n -i "$TARGET_SSH_KEY" -o StrictHostKeyChecking=no "$TARGET_USER@$TARGET" "powershell -Command \"Remove-Item -Recurse -Force '$WIN_CLEAN_PATH\' -ErrorAction SilentlyContinue\"" 2>/dev/null || true
-                else
-                    ssh -n -i "$TARGET_SSH_KEY" -o StrictHostKeyChecking=no "$TARGET_USER@$TARGET" "rm -rf \"$TIMESTAMP_DEST\"" 2>/dev/null || true
-                fi
-		TIMESTAMP_DEST=""
-            fi
-
-	    if [ -n "$RUNNING_DB_CONTAINERS" ]; then
-                echo -e "${C_GRN}▶️  Restarting Docker databases...${C_DEF}"
-                echo "$RUNNING_DB_CONTAINERS" | xargs -r docker start >/dev/null 2>&1
-            fi
-
-            if [ -n "$RUNNING_NATIVE_DBS" ]; then
-                echo -e "${C_GRN}▶️  Restarting native databases...${C_DEF}"
-                echo "$RUNNING_NATIVE_DBS" | xargs -r systemctl start >/dev/null 2>&1
-            fi
-        }
-
-	trap cleanup_databases EXIT INT TERM
-
-	if [ -n "$RUNNING_DB_CONTAINERS" ] || [ -n "$RUNNING_NATIVE_DBS" ]; then
-            echo -e "${C_YEL}⏸️  Shutting down live databases (Cold Backup)...${C_DEF}"
-
-            if [ -n "$RUNNING_DB_CONTAINERS" ]; then
-                echo -e "  ${C_CYN}Shutting down Docker DBs:${C_DEF} $(echo $RUNNING_DB_CONTAINERS | tr '\n' ' ')"
-                echo "$RUNNING_DB_CONTAINERS" | xargs -r docker stop >/dev/null 2>&1
-            fi
-
-            if [ -n "$RUNNING_NATIVE_DBS" ]; then
-                echo -e "  ${C_CYN}Shutting down Native DBs:${C_DEF} $(echo $RUNNING_NATIVE_DBS | tr '\n' ' ')"
-                echo "$RUNNING_NATIVE_DBS" | xargs -r systemctl stop >/dev/null 2>&1
-            fi
-        fi
-	################################
-
-        echo -e "${C_YEL}--- [ Rsync Transfer Progress ] ---${C_DEF}"
-
-        if [ "$IS_WINDOWS" == "true" ]; then
-            rsync -rtvR \
-                --info=progress2,flist2 \
-                --no-compress \
-                --no-owner \
-                --no-group \
-                --no-perms \
-		--no-links \
-		--size-only \
-                --modify-window=2 \
-                --iconv=utf-8,utf-8 \
-                $LINK_DEST_ARG \
-                -e "ssh -i $TARGET_SSH_KEY -o StrictHostKeyChecking=no" \
-                --rsync-path="\"$WIN_RSYNC_PATH\"" \
-                "${SOURCES[@]}" \
-                "$TARGET_USER@$TARGET:$TIMESTAMP_DEST"
-        else
-            rsync -aR \
-                --info=progress2 \
-                --no-compress \
-                --no-owner \
-                --no-group \
-                --no-perms \
-                --modify-window=2 \
-                --iconv=utf-8,utf-8 \
-                $LINK_DEST_ARG \
-                -e "ssh -i $TARGET_SSH_KEY -o StrictHostKeyChecking=no" \
-                "${SOURCES[@]}" \
-                "$TARGET_USER@$TARGET:$TIMESTAMP_DEST"
-        fi
-
-        local RSYNC_EXIT=$?
-	#Created v1.1.0
-	cleanup_databases
-	trap - EXIT INT TERM
-	####################
-
-        echo -e "\n${C_YEL}-----------------------------------${C_DEF}"
-
-        if [ $RSYNC_EXIT -eq 0 ]; then
-            print_row "💾" "Rsync Status" "Result:" "${C_GRN}Success${C_DEF}" "Exit:" "0"
-            test_restore "$TIMESTAMP_DEST"
-        else
-            print_row "💾" "Rsync Status" "Result:" "${C_RED}Failed${C_DEF}" "Exit:" "$RSYNC_EXIT"
-        fi
     }
 
     shutdown_host() {

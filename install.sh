@@ -6,7 +6,7 @@
 #  Description: Installer of Szakyops
 #  Author:      Stephen/Szaky (info@szakysoft.hu)
 #  Website:     https://szakysoft.hu
-#  Version:     1.1.0
+#  Version:     1.1.1
 #  License:     MIT
 # ==============================================================================
 
@@ -63,13 +63,12 @@ if [ "$IS_REMOTE" = true ]; then
     echo "Cleaning up remote installer temporary files..."
     rm -rf "$SOURCE_DIR"
     rm -f /tmp/szakyops_install.sh
+#Modified v1.1.1
 else
-    if [[ "$SOURCE_DIR" != "/" && "$SOURCE_DIR" != "$INSTALL_DIR" && "$SOURCE_DIR" != "/tmp" ]]; then
-        echo "Cleaning up local installer repository..."
-        rm -rf "$SOURCE_DIR"
-    fi
+    echo "Local installation complete."
+    echo "You can safely remove the cloned repository directory ($SOURCE_DIR) if you no longer need it."
 fi
-
+################
 echo
 echo "You can now run:"
 echo "  sudo szakyops"

@@ -6,7 +6,7 @@
 #  Description: Main Entry Point & Management CLI for Szakyops Toolkit
 #  Author:      Stephen Szaky (info@szakysoft.hu)
 #  Website:     https://szakysoft.hu
-#  Version:     1.1.0
+#  Version:     1.1.1
 #  License:     MIT
 # ==============================================================================
 
@@ -65,7 +65,7 @@ print_header() {
 show_menu() {
     while true; do
         print_header
-        printf "  [1] ${C_CYN}%-20s${C_DEF} | %s\n" "SysStat" "View system statistics (Fetch)"
+        printf "  [1] ${C_CYN}%-20s${C_DEF} | %s\n" "SusStat" "View system statistics (Fetch)"
         printf "  [2] ${C_CYN}%-20s${C_DEF} | %s\n" "Backup Setup" "Configure backup targets & sources"
         printf "  [3] ${C_CYN}%-20s${C_DEF} | %s\n" "Run Backup Now" "Execute backup immediately"
         printf "  [4] ${C_CYN}%-20s${C_DEF} | %s\n" "Cron Manager" "Schedule backups via Crontab"

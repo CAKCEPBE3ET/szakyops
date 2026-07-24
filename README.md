@@ -56,7 +56,7 @@ If you prefer to clone the repository locally, navigate to the project root and 
 
 ```bash
 git clone https://github.com/CAKCEPBE3ET/szakyops.git
-cd Szakyops
+cd szakyops
 sudo ./szakyops --install
 ```
 
