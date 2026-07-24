@@ -115,7 +115,7 @@ run_szakysave() {
         #CREATED v1.1.0
         local RUNNING_DB_CONTAINERS=$(sudo -n docker ps --filter "status=running" --format "{{.Names}}" 2>/dev/null | grep -E -i "db|mysql|postgres|mariadb|redis|mongo" || true)
         local RUNNING_NATIVE_DBS=$(systemctl list-units --type=service --state=running 2>/dev/null | grep -E -i "mysql|postgresql|mariadb|redis|mongod" | awk '{print $1}' || true)
-        
+
         cleanup_databases(){
             if [ "${RSYNC_EXIT:-1}" -ne 0 ] && [ -n "$TIMESTAMP_DEST" ]; then
                 echo -e "\n${C_RED}⚠️ Backup interrupted/failed! Cleaning up incomplete backup on target...${C_DEF}"
@@ -221,7 +221,7 @@ run_szakysave() {
             return
         fi
 
-        local RESTORE_TMP="/tmp/s1_backup_restore_test"
+        local RESTORE_TMP="/tmp/backup_test"
         mkdir -p "$RESTORE_TMP"
 
         local SUCCESS_COUNT=0
